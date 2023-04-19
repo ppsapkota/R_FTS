@@ -1,0 +1,224 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+## process fts data
+
+
+```{r}
+library(openxlsx)
+source("./R/settings.R")
+ckanr_setup(url = "https://data.humdata.org/")
+```
+
+## functions 
+
+```{r}
+## function to get links to download fts funding files
+get_links_to_funding <- function(country_name){
+  ## set default ckan website
+  #ckanr_setup(url = "https://data.humdata.org/")
+  ####  finding links per country
+  country_funding_package <- package_search(q= str_c(country_name," - Requirements and Funding Data"), rows = 1 )
+  ## get resources to download
+  funding_package_resources <- country_funding_package$results[[1]]$resources %>%     ## get the first package
+                               list.select(description,download_url, last_modified) %>%   ## select only needed columns 
+                               list.stack() #  convert to data frame
+    ## process the data 
+  links_to_funding <- funding_package_resources %>% 
+                              mutate(
+                               bname = basename(download_url),
+                               no_fts = str_replace(bname,"fts_",""),
+                               data_type = str_replace(no_fts,str_c("_",str_to_lower(country_iso),".csv"),""),
+                               extract_date =  ymd(str_sub(last_modified,1,10)),
+                               country_name = country_name,
+                               country_iso = country_iso
+                               ) #%>% 
+                            # select(
+                            #     description
+                            #   , download_url
+                            #   , extract_date
+                            #   #, data_type
+                            # )
+  return(links_to_funding)
+}
+#-------------Funding for one country - all funding information as list--------------------------------------------#
+
+read_funding_hdx <- function(links_df){
+  #links_df <- links_country
+  for (k in 1:nrow(links_df)){
+    # k = 1
+      print(str_c("dataset:",links_df$data_type[k],"->",links_df$country_name[k]))
+      ## read all records including th hxl tags
+      all_rows <- readLines(links_df$download_url[k])
+      ## remove hxl row
+      skip_second <- all_rows[-2] 
+      
+      ## read data from hdx
+      hdx_funding <-  read.csv(textConnection(skip_second), header = TRUE, stringsAsFactors = FALSE, encoding = "UTF-8")
+      
+      ## process data : clean names and add country_name and exctract date
+      hdx_funding_processed <- hdx_funding %>% 
+        clean_names() %>% 
+        mutate(country_name = links_df$country_name[k],
+               iso3_code = links_df$country_iso[k],
+               extract_date = links_df$extract_date[k])
+      
+       if ( k == 1 ){
+         hdx_datasets <- list(hdx_funding_processed)  ## initiate a list of first dataset 
+       } else{
+         hdx_datasets <- hdx_datasets  %>% list.append(hdx_funding_processed)
+       }
+  }
+  names_datasets <- links_df$data_type
+  names(hdx_datasets) <- names_datasets
+  return(hdx_datasets)
+}
+
+#-----------------Append ONE Type of funding information of all countries together-------------------------------------#
+read_funding_hdx_append <- function(links_df){
+  #links_df <- links_country
+  for (k in 1:nrow(links_df)){
+    # k = 1
+      print(str_c("dataset:",links_df$data_type[k],"->",links_df$country_name[k]))
+      ## read all records including th hxl tags
+      all_rows <- readLines(links_df$download_url[k])
+      ## remove hxl row
+      skip_second <- all_rows[-2]
+      ## read data from hdx
+      hdx_funding <-  read.csv(textConnection(skip_second), header = TRUE, stringsAsFactors = FALSE, encoding = "UTF-8")
+      
+      ## process data : clean names and add country_name and exctract date
+      hdx_funding_processed <- hdx_funding %>% 
+                               clean_names() %>% 
+                               mutate(country_name = links_df$country_name[k],
+                                      iso3_code = links_df$country_iso[k],
+                                      extract_date = links_df$extract_date[k])
+      
+       if ( k == 1 ){
+         hdx_datasets <- list(hdx_funding_processed)  ## initiate a list of first dataset 
+       } else{
+         hdx_datasets <- hdx_datasets  %>% bind_rows(hdx_funding_processed)
+       }
+  }
+  return(hdx_datasets)
+}
+
+```
+
+
+## read from hdx country pages
+```{r}
+## read a list of countries in Asia and the Pacific region
+fts_countries <- read_excel("./resources/fts_country_lists_asia_pacific.xlsx", sheet = "hdx_asia_pacific")
+## connect to the database
+#mycon <- dbConnect(Postgres(), user = pgusername, password=pgpass,dbname = pgdbname, host = pgserver , port = pgport)
+
+## start downloading fts files from each country
+for (i_country in 1:nrow(fts_countries)){
+  #i_country <- 1
+  country_name <- fts_countries$country[i_country]
+  country_iso3 <- fts_countries$country_iso[i_country]
+  #
+  print(country_name)
+  country_iso <-str_to_lower(fts_countries$country_iso[i_country])
+  ## get links on hdx for the country
+  #links_country<-links_to_funding
+  links_country <- get_links_to_funding(country_name)
+  
+  if (i_country==1){
+         hdx_fts_links_all <- links_country  ## initiate a list of first dataset 
+       }else{
+         hdx_fts_links_all <- hdx_fts_links_all  %>% bind_rows(links_country)
+       }
+  ## download datasets at the links
+  #data_from_hdx <- read_funding_hdx(links_country)
+  ## date
+  fts_extract_date <- links_country$extract_date[1]
+  fts_extract_date
+}
+  ## generate base file name
+  save_fname <- str_c("./DATA/hdx_fts_links_all","_",fts_extract_date,".xlsx")
+  openxlsx::write.xlsx(hdx_fts_links_all,save_fname, overwrite = TRUE)
+
+  ## download datasets at the links
+  hdx_fts_links_all_funding_total <- hdx_fts_links_all %>%
+                                        filter(data_type=="requirements_funding")        
+  data_from_hdx_total <- read_funding_hdx_append(hdx_fts_links_all_funding_total)
+  
+  
+  ## download datasets at the links
+  hdx_fts_links_all_funding_by_cluster <- hdx_fts_links_all %>%
+                                        filter(data_type=="requirements_funding_cluster")          
+  data_from_hdx_by_cluster <- read_funding_hdx_append(hdx_fts_links_all_funding_by_cluster)
+
+  
+  ## download datasets at the links
+  hdx_fts_links_all_incoming_funding <- hdx_fts_links_all %>%
+                                        filter(data_type=="incoming_funding")        
+  data_from_hdx_incoming_funding <- read_funding_hdx_append(hdx_fts_links_all_incoming_funding)
+  
+  
+  ## generate base file name
+  save_fname <- str_c("./DATA/HDX_Downloads/asia_pacific_fts_requirements_funding_cluster","_",fts_extract_date,".xlsx")
+  ## export country data to excel
+  #openxlsx::write.xlsx(data_from_hdx,save_fname,sheetName="fts_funding_cluster", overwrite = TRUE)
+  ## save to RDS
+  #saveRDS(object = data_from_hdx , file = str_c(basefname,".RDS"))
+    wb<-createWorkbook()
+    addWorksheet(wb,"requirements_funding")
+    addWorksheet(wb,"requirements_funding_cluster")
+    addWorksheet(wb,"incoming_funding")
+    
+    #
+    writeDataTable(wb,sheet="requirements_funding",x=data_from_hdx_total,tableName = "requirements_funding")
+    writeDataTable(wb,sheet="requirements_funding_cluster",x=data_from_hdx_by_cluster,tableName ="requirements_funding_cluster")
+    writeData(wb,sheet="incoming_funding",x=data_from_hdx_incoming_funding)
+    #
+    saveWorkbook(wb,save_fname,overwrite = TRUE)
+    
+    #write big table
+    save_fname_incoming <- str_c("./DATA/HDX_Downloads/asia_pacific_fts_incoming_funding","_",fts_extract_date,".xlsx")
+  ## export country data to excel
+    openxlsx::write.xlsx(data_from_hdx_incoming_funding,save_fname_incoming,sheetName="fts_incoming_funding", overwrite = TRUE)
+    
+```
+
+
+```{r}
+# ## read a list of countries  in the Asia and the Pacific region
+# fts_countries <- read_excel("./resources/fts_country_lists_asia_pacific.xlsx", sheet = "hdx_asia_pacific")
+# ## connect to the database
+# #mycon <- dbConnect(Postgres(), user = pgusername, password=pgpass,dbname = pgdbname, host = pgserver , port = pgport)
+# ## start downloading fts files from each country
+# 
+# for (i_country in 1:nrow(fts_countries)){
+#   #i_country <- 1
+#   country_name <- fts_countries$country[i_country]
+#   country_iso3 <- fts_countries$country_iso[i_country]
+#   #
+#   print(country_name)
+#   country_iso <-str_to_lower(fts_countries$country_iso[i_country])
+#   ## get links on hdx for the country
+#   #links_country<-links_to_funding
+#   links_country <- get_links_to_funding(country_name)
+#   ## download datasets at the links
+#   #data_from_hdx <- read_funding_hdx(links_country)
+#   ## date
+#   fts_extract_date <- links_country$extract_date[1]
+#   fts_extract_date
+# ## download datasets at the links
+#   data_from_hdx <- read_funding_hdx(links_country)
+#   ## generate base file name
+#   basefname <- str_c("./DATA/HDX_Downloads/asia_pacific_fts_",fts_extract_date,"_",make_clean_names(country_name))
+# 
+#   ## export country data to excel
+#   writexl::write_xlsx(path = str_c(basefname,".xlsx"), x = data_from_hdx)
+# 
+#   ## save to RDS
+#   #saveRDS(object = data_from_hdx , file = str_c(basefname,".RDS"))
+# }
+
+```
+
