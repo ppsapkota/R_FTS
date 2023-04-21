@@ -45,6 +45,7 @@ extract_date <- format(now, "%Y-%m-%d")
 ```
 
 ## FTS data download
+
 ```{r}
 #https://api.hpc.tools/v1/public/fts/flow?organizationAbbrev=wfp,unicef&year=2015
 #url<-'https://api.hpc.tools/v1/public/fts/flow?organizationAbbrev=wfp,unicef&year=2015'
@@ -67,7 +68,6 @@ u<-''
 pw<-''
 #
 ```
-
 
 ```{r}
 read_fts_funding_flows <-function(url,u,pw){
@@ -179,13 +179,13 @@ process_fts_funding_flows<-function(d_flows_raw){
 }
 ```
 
-
 ```{r}
 a<-read_fts_funding_flows(url,u, pw)
 
 ```
 
 ## read from hdx country pages
+
 ```{r}
 ## read a list of countries in Asia and the Pacific region
 year_list <- c(2018, 2019, 2020, 2021, 2022)
@@ -287,6 +287,3 @@ for (i_country in 1:nrow(fts_countries)){
     #saveWorkbook(wb,save_fname,overwrite = TRUE)
     write.csv(x=fts_flows_dataset_processed,file=save_fname_csv)
 ```
-
-
-
