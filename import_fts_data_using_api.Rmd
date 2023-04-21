@@ -78,8 +78,8 @@ read_fts_funding_flows <-function(url,u,pw){
   d_flows<- d_content$data$flows
   d_incoming<- as.data.frame(d_content$data$incoming)
   d_nextpage<- d_content$meta$nextLink #this is for pagination information
-#-------------------------
-return(d_flows)
+  #-------------------------
+  return(d_flows)
 }
 
 ###-------process the data---------------------------
@@ -87,94 +87,95 @@ return(d_flows)
 process_fts_funding_flows<-function(d_flows_raw){
   d_flows<-d_flows_raw
   #Unnest field list
-    fields_unnest <-c("sourceObjects","destinationObjects")
-    #Rename the field names with the prefix
-    #d_do <- as.data.frame(cbind(d_flows$id, d_flows$destinationObjects))
-    #Convert nested list to data frame by column
-    #aaa<- d_sourceobjects %>% unnest (sourceObjects)
-    if (length(d_flows)>0){
-        #-------------------#
-        for (i_n in 1:length(fields_unnest)){
-          #d_unnest <- select(d_flows,id,fields_unnest[i_n])
-          field_name_o <-fields_unnest[i_n]
+  fields_unnest <-c("sourceObjects","destinationObjects")
+  #Rename the field names with the prefix
+  #d_do <- as.data.frame(cbind(d_flows$id, d_flows$destinationObjects))
+  #Convert nested list to data frame by column
+  #aaa<- d_sourceobjects %>% unnest (sourceObjects)
+  if (length(d_flows)>0){
+    #-------------------#
+    for (i_n in 1:length(fields_unnest)){
+      #d_unnest <- select(d_flows,id,fields_unnest[i_n])
+      field_name_o <-fields_unnest[i_n]
+      #
+      for (i_rf in 1:nrow(d_flows)){
+        irow_df <- as.data.frame(d_flows[i_rf,field_name_o])
+        # Convert all columns to character  
+        irow_df <- as.data.frame(lapply(irow_df, as.character, na.rm=TRUE), stringsAsFactors = FALSE)
+        #irow_df_g <- aggregate(.~type, irow_df, paste(unique(.)), collapse=" | ")
+        if (nrow(irow_df)>0){
+          #group by type
+          irow_df<-irow_df %>%
+            group_by(type) %>% 
+            arrange(type,name) %>% 
+            summarise_all(~paste(unique(.x),collapse=" | ")) %>% 
+            ungroup()
           #
-          for (i in 1:nrow(d_flows)){
-            irow_df <- as.data.frame(d_flows[i,field_name_o])
-            # Convert all columns to character  
-            irow_df <- as.data.frame(lapply(irow_df, as.character, na.rm=TRUE), stringsAsFactors = FALSE)
-            #irow_df_g <- aggregate(.~type, irow_df, paste(unique(.)), collapse=" | ")
-            if (nrow(irow_df)>0){
-              #group by type
-              irow_df<-irow_df %>%
-                        group_by(type) %>% 
-                        summarise_all(~paste(unique(.x),collapse=" | ")) %>% 
-                        ungroup()
+          #irow_type<-unlist(irow_df$type)
+          #irow_name<-unlist(irow_df$name)
+          #irow_orgtype<-unlist(irow_df$organizationSubTypes)
+          #
+          prefix <-gsub("Objects","",field_name_o)
+          
+          #for each list
+          for (t in 1:nrow(irow_df)){
+            #find information in the field d_sourceObjects
+            field_name = paste(prefix,irow_df[t,"type"],sep="_")
+            if (field_name %in% names(d_flows)){
+              #found in the data frame
+              #add value to the data
+              d_flows[i_rf,field_name]<-irow_df[t,"name"]
+              #----------------Done Organization type
+            }else{
+              #Not found in the data frame
+              #add field first and then the value to the data
+              d_flows[[field_name]]<-NA
+              d_flows[i_rf,field_name]<-irow_df[t,"name"]
+            }
+            #-----------there can be a neat method----------------#
+            #add additional fields
+            #get the field names from the irow_df and add to the 
+            irow_df_field_names<-paste0(prefix,"_",names(irow_df))
+            #irow_df<-rename_with(irow_df,~paste0(prefix,"_",.),starts_with("."))
+            #"organizationTypes"    "organizationSubTypes" "organizationLevels"
+            if (!(paste0(prefix,"_","organizationTypes") %in% names(d_flows))){
+              d_flows[[paste0(prefix,"_","organizationTypes")]]<-NA
+            }
+            #
+            if (!(paste0(prefix,"_","organizationSubTypes") %in% names(d_flows))){
+              d_flows[[paste0(prefix,"_","organizationSubTypes")]]<-NA
+            }
+            #
+            if (!(paste0(prefix,"_","organizationLevels") %in% names(d_flows))){
+              d_flows[[paste0(prefix,"_","organizationLevels")]]<-NA
+            }
+            #-----------------------
+            #if organization type
+            if (field_name == "destination_Organization" || field_name == "source_Organization" ){
               #
-              #irow_type<-unlist(irow_df$type)
-              #irow_name<-unlist(irow_df$name)
-              #irow_orgtype<-unlist(irow_df$organizationSubTypes)
+              if ("organizationTypes" %in% names(irow_df)){
+                d_flows[i_rf,paste0(prefix,"_","organizationTypes")]<-irow_df[t,"organizationTypes"]
+              }
               #
-              prefix <-gsub("Objects","",field_name_o)
-              
-              #for each list
-              for (t in 1:nrow(irow_df)){
-                #find information in the field d_sourceObjects
-                field_name = paste(prefix,irow_df[t,"type"],sep="_")
-                if (field_name %in% names(d_flows)){
-                  #found in the data frame
-                  #add value to the data
-                  d_flows[i,field_name]<-irow_df[t,"name"]
-                #----------------Done Organization type
-                }else{
-                  #Not found in the data frame
-                  #add field first and then the value to the data
-                  d_flows[[field_name]]<-""
-                  d_flows[i,field_name]<-irow_df[t,"name"]
-                }
-                #-----------there can be a neat method----------------#
-                #add additional fields
-                #get the field names from the irow_df and add to the 
-                irow_df_field_names<-paste0(prefix,"_",names(irow_df))
-                #irow_df<-rename_with(irow_df,~paste0(prefix,"_",.),starts_with("."))
-                #"organizationTypes"    "organizationSubTypes" "organizationLevels"
-                if (!(paste0(prefix,"_","organizationTypes") %in% names(d_flows))){
-                  d_flows[[paste0(prefix,"_","organizationTypes")]]<-NA
-                }
-                #
-                if (!(paste0(prefix,"_","organizationSubTypes") %in% names(d_flows))){
-                  d_flows[[paste0(prefix,"_","organizationSubTypes")]]<-NA
-                }
-                #
-                if (!(paste0(prefix,"_","organizationLevels") %in% names(d_flows))){
-                  d_flows[[paste0(prefix,"_","organizationLevels")]]<-NA
-                }
-                  #-----------------------
-                  #if organization type
-                  if (field_name == "destination_Organization" || field_name == "source_Organization" ){
-                    #
-                      if ("organizationTypes" %in% names(irow_df)){
-                        d_flows[i,paste0(prefix,"_","organizationTypes")]<-irow_df[t,"organizationTypes"]
-                      }
-                    #
-                      if ("organizationSubTypes" %in% names(irow_df)){
-                        d_flows[i,paste0(prefix,"_","organizationSubTypes")]<-irow_df[t,"organizationSubTypes"]
-                      }
-                    #
-                    if ("organizationLevels" %in% names(irow_df)){
-                        d_flows[i,paste0(prefix,"_","organizationLevels")]<-irow_df[t,"organizationLevels"]
-                      }
-                  }
-              #--------------------------#
+              if ("organizationSubTypes" %in% names(irow_df)){
+                d_flows[i_rf,paste0(prefix,"_","organizationSubTypes")]<-irow_df[t,"organizationSubTypes"]
+              }
+              #
+              if ("organizationLevels" %in% names(irow_df)){
+                d_flows[i_rf,paste0(prefix,"_","organizationLevels")]<-irow_df[t,"organizationLevels"]
               }
             }
+            #--------------------------#
           }
-        } #loop for each nested fields
-      #----------------------#
-    }else{ #for empty dataframe
-      d_flows<-data.frame(Dummy=character(0))
-    }
-#-------------------------
-return(d_flows)
+        }
+      }
+    } #loop for each nested fields
+    #----------------------#
+  }else{ #for empty dataframe
+    d_flows<-data.frame(Dummy=character(0))
+  }
+  #-------------------------
+  return(d_flows)
 }
 ```
 
