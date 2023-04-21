@@ -40,6 +40,7 @@ knitr::opts_chunk$set(echo = TRUE)
 now <- Sys.time()
 # Format current date and time as a string in the format "YYYY-MM-DD HH:MM:SS"
 extract_datetime <- format(now, "%Y-%m-%d-%H%Mhrs")
+extract_date <- format(now, "%Y-%m-%d")
 
 ```
 
@@ -53,7 +54,9 @@ extract_datetime <- format(now, "%Y-%m-%d-%H%Mhrs")
 url_base <- "https://api.hpc.tools"
 api_param <- "/v1/public/fts/flow?countryISO3=PHL&year=2022&format=json"
 api_param <- "/v1/public/fts/flow?year=2022&format=json"
+api_param <- "/v1/public/fts/flow?locationid=241&year=2022&format=json"
 #https://api.hpc.tools/v1/public/fts/flow?locationid=210&year=2010&format=json
+
 #api_param <- "/v1/public/emergency/country/PHL"
 api_path <- paste0(url_base,api_param)
 
@@ -66,15 +69,23 @@ pw<-''
 ```
 
 
-
 ```{r}
 read_fts_funding_flows <-function(url,u,pw){
   rawdata<-GET(url,authenticate(u,pw),progress())
-  d_content <- rawToChar(rawdata$content)
-  d_content <- fromJSON(d_content, flatten = TRUE)
+  d_content<- rawToChar(rawdata$content)
+  d_content<- fromJSON(d_content, flatten = TRUE)
   #
   d_flows<- d_content$data$flows
-  d_incoming<-as.data.frame(d_content$data$incoming)
+  d_incoming<- as.data.frame(d_content$data$incoming)
+  d_nextpage<- d_content$meta$nextLink #this is for pagination information
+#-------------------------
+return(d_flows)
+}
+
+###-------process the data---------------------------
+# does the unnesting of the data
+process_fts_funding_flows<-function(d_flows_raw){
+  d_flows<-d_flows_raw
   #Unnest field list
     fields_unnest <-c("sourceObjects","destinationObjects")
     #Rename the field names with the prefix
@@ -89,53 +100,84 @@ read_fts_funding_flows <-function(url,u,pw){
           #
           for (i in 1:nrow(d_flows)){
             irow_df <- as.data.frame(d_flows[i,field_name_o])
+            # Convert all columns to character  
+            irow_df <- as.data.frame(lapply(irow_df, as.character, na.rm=TRUE), stringsAsFactors = FALSE)
+            #irow_df_g <- aggregate(.~type, irow_df, paste(unique(.)), collapse=" | ")
             if (nrow(irow_df)>0){
-              irow_type<-unlist(irow_df$type)
-              irow_name<-unlist(irow_df$name)
-              irow_orgtype<-unlist(irow_df$organizationSubTypes)
+              #group by type
+              irow_df<-irow_df %>%
+                        group_by(type) %>% 
+                        summarise_all(~paste(unique(.x),collapse=" | ")) %>% 
+                        ungroup()
+              #
+              #irow_type<-unlist(irow_df$type)
+              #irow_name<-unlist(irow_df$name)
+              #irow_orgtype<-unlist(irow_df$organizationSubTypes)
               #
               prefix <-gsub("Objects","",field_name_o)
+              
               #for each list
               for (t in 1:nrow(irow_df)){
                 #find information in the field d_sourceObjects
                 field_name = paste(prefix,irow_df[t,"type"],sep="_")
-                if (field_name %in% names(d_flows)) {
+                if (field_name %in% names(d_flows)){
                   #found in the data frame
                   #add value to the data
                   d_flows[i,field_name]<-irow_df[t,"name"]
-                  #if organization type
-                  if (field_name == "destination_Organization"){
-                    if ("organizationSubTypes" %in% names(irow_df)){
-                      d_flows[i,"destination_organizationTypes"]<-irow_df[t,"organizationSubTypes"]}else {
-                        d_flows[i,"destination_organizationTypes"]<-irow_df[t,"organizationTypes"]  
-                      }
-                  } 
-                } else {
+                #----------------Done Organization type
+                }else{
                   #Not found in the data frame
                   #add field first and then the value to the data
                   d_flows[[field_name]]<-""
                   d_flows[i,field_name]<-irow_df[t,"name"]
+                }
+                #-----------there can be a neat method----------------#
+                #add additional fields
+                #get the field names from the irow_df and add to the 
+                irow_df_field_names<-paste0(prefix,"_",names(irow_df))
+                #irow_df<-rename_with(irow_df,~paste0(prefix,"_",.),starts_with("."))
+                #"organizationTypes"    "organizationSubTypes" "organizationLevels"
+                if (!(paste0(prefix,"_","organizationTypes") %in% names(d_flows))){
+                  d_flows[[paste0(prefix,"_","organizationTypes")]]<-NA
+                }
+                #
+                if (!(paste0(prefix,"_","organizationSubTypes") %in% names(d_flows))){
+                  d_flows[[paste0(prefix,"_","organizationSubTypes")]]<-NA
+                }
+                #
+                if (!(paste0(prefix,"_","organizationLevels") %in% names(d_flows))){
+                  d_flows[[paste0(prefix,"_","organizationLevels")]]<-NA
+                }
+                  #-----------------------
                   #if organization type
-                  if (field_name == "destination_Organization"){
-                    d_flows[["destination_organizationTypes"]]<-""
-                    #d_flows[i,"destination_organizationTypes"]<-irow_df[t,"organizationSubTypes"]
-                    if ("organizationSubTypes" %in% names(irow_df)){
-                      d_flows[i,"destination_organizationTypes"]<-irow_df[t,"organizationSubTypes"]}else {
-                        d_flows[i,"destination_organizationTypes"]<-irow_df[t,"organizationTypes"]  
+                  if (field_name == "destination_Organization" || field_name == "source_Organization" ){
+                    #
+                      if ("organizationTypes" %in% names(irow_df)){
+                        d_flows[i,paste0(prefix,"_","organizationTypes")]<-irow_df[t,"organizationTypes"]
+                      }
+                    #
+                      if ("organizationSubTypes" %in% names(irow_df)){
+                        d_flows[i,paste0(prefix,"_","organizationSubTypes")]<-irow_df[t,"organizationSubTypes"]
+                      }
+                    #
+                    if ("organizationLevels" %in% names(irow_df)){
+                        d_flows[i,paste0(prefix,"_","organizationLevels")]<-irow_df[t,"organizationLevels"]
                       }
                   }
-                }
+              #--------------------------#
               }
             }
           }
         } #loop for each nested fields
       #----------------------#
-    }else{
+    }else{ #for empty dataframe
       d_flows<-data.frame(Dummy=character(0))
     }
+#-------------------------
 return(d_flows)
 }
 ```
+
 
 ```{r}
 a<-read_fts_funding_flows(url,u, pw)
@@ -146,10 +188,17 @@ a<-read_fts_funding_flows(url,u, pw)
 ```{r}
 ## read a list of countries in Asia and the Pacific region
 year_list <- c(2018, 2019, 2020, 2021, 2022)
-page_list =c(1,2,3,4,5,6,7,8,9,10)
+#page_list =c(1,2,3,4,5,6,7,8,9,10)
 fts_countries <- read_excel("./resources/fts_country_lists_asia_pacific.xlsx", sheet = "hdx_asia_pacific")
 ## connect to the database
-#mycon <- dbConnect(Postgres(), user = pgusername, password=pgpass,dbname = pgdbname, host = pgserver , port = pgport)
+#api_param <- "/v1/public/fts/flow?countryISO3=BGD&year=2020&format=json"
+  #api_param<-"/v1/public/fts/flow?locationid=19&year=2020&format=json"
+  #https://api.hpc.tools/v1/public/fts/flow?locationid=210&year=2010&format=json
+  #api_param <- "/v1/public/emergency/country/PHL"
+  #API access
+  url_base <- "https://api.hpc.tools"
+  u<-''
+  pw<-''
 ## start downloading fts files from each country
 for (i_country in 1:nrow(fts_countries)){
   i_flag<-1
@@ -158,54 +207,72 @@ for (i_country in 1:nrow(fts_countries)){
   country_iso3 <- fts_countries$country_iso[i_country]
   country_code <- fts_countries$coundry_fts_code[i_country]
   #
-  print(paste0("\n------",country_name,"--------\n"))
+  cat(paste0("--",country_name,"--\n"))
   country_iso <-str_to_lower(fts_countries$country_iso[i_country])
-  ## create API url
-  url_base <- "https://api.hpc.tools"
-  #api_param <- "/v1/public/fts/flow?countryISO3=BGD&year=2020&format=json"
-  #api_param<-"/v1/public/fts/flow?locationid=19&year=2020&format=json"
-  #https://api.hpc.tools/v1/public/fts/flow?locationid=210&year=2010&format=json
-  #api_param <- "/v1/public/emergency/country/PHL"
   for (i_y in 1:length(year_list)){
-    year <- year_list[i_y]
-    #create pagination
-    
-    for (i_p in 1:length(page_list)){
-      i_page <- page_list[i_p]
-      #api_param <- paste0("/v1/public/fts/flow?countryISO3=",country_iso3,"&year=",year,"&format=json","&page=",i_page)
-      api_param <- paste0("/v1/public/fts/flow?locationid=",country_code,"&year=",year,"&format=json","&page=",i_page)
-      api_path <- paste0(url_base,api_param)
-      #url<-"https://api.hpc.tools/v1/public/fts/flow?year=2022&locationid=176"
-      url<-api_path
-      u<-''
-      pw<-''
-      print(paste0("--   ",url,"   --"))
-      #
-      db_fts_flows<-read_fts_funding_flows(url,u, pw)
-      #check for empty data frame - no records found in the database
-      if (nrow(db_fts_flows)>0){
+    #i_y<-1
+    year<-year_list[i_y]
+    #Create pagination - for one country and one year
+    data_list<-list()
+    #for (i_p in 1:length(page_list)){
+    # i_page <- page_list[i_p]
+    i_page<-1 #page initialization  
+    #check for the output records
+      while (i_page>0){
+        ## create API url
+        #api_param <- paste0("/v1/public/fts/flow?countryISO3=",country_iso3,"&year=",year,"&format=json","&page=",i_page)
+        api_param<- paste0("/v1/public/fts/flow?locationid=",country_code,"&year=",year,"&format=json","&page=",i_page)
+        api_path<- paste0(url_base,api_param)
+        #url<-"https://api.hpc.tools/v1/public/fts/flow?locationid=176&year=2022&format=json"
+        url<-api_path
+        cat(paste0("\n-- ",url," --\n"))
+        db_fts_flows_i_page<-read_fts_funding_flows(url,u,pw)
+        #Initialize the data
+        if (i_page==1){
+          #first page output
+          db_fts_flows<-db_fts_flows_i_page
+        }else if (i_page>1){
+          #amend page output
+          db_fts_flows <- db_fts_flows  %>% bind_rows(db_fts_flows_i_page)
+        }
+        # Increment page parameter to make another request
+        if (length(db_fts_flows_i_page)>0){
+          i_page<-i_page+1
+        #if no data is returned
+        }else{
+          #db_fts_flows<-db_fts_flows_i
+          i_page<-0 #reset the page and break the loop
+        }
+      }#done while - provides data for one country and single year
+     
+     #check for empty data frame - no records found in the data frame
+      if (length(db_fts_flows)>0){
         db_fts_flows[["Country"]]<-country_name
         db_fts_flows[["CountryISO3"]]<-str_to_upper(country_iso3)
         db_fts_flows[["Data_Year"]]<-year  
       }
-      
+      #
+      #append to the data frame
       if (i_country == 1 && i_flag==1){
         fts_flows_dataset <- db_fts_flows
         i_flag <- i_flag +1
-      } else{
+      }else{
         fts_flows_dataset <- fts_flows_dataset  %>% bind_rows(db_fts_flows)
         i_flag <- i_flag +1
       }
-      
-    }
-  }
+      #--done - append to the data frame
+  }#done for year
   #
 }
-  
-  fts_flows_dataset<-fts_flows_dataset %>% select(-sourceObjects,-destinationObjects,-reportDetails)
+  #----process the data downloaded data----
+  #--- this is for unnesting of the dataset----
+  fts_flows_dataset_processed<-process_fts_funding_flows(fts_flows_dataset)
+  #-----------------------
+  if (nrow(fts_flows_dataset_processed)>0){
+    fts_flows_dataset_processed<-fts_flows_dataset_processed %>% select(-sourceObjects,-destinationObjects,-reportDetails)
+  }
   # Convert all columns to character  
-  fts_flows_dataset <- as.data.frame(lapply(fts_flows_dataset, as.character), stringsAsFactors = FALSE)
-  
+  fts_flows_dataset_processed <- as.data.frame(lapply(fts_flows_dataset_processed, as.character,na.rm=TRUE), stringsAsFactors = FALSE)
   ## generate base file name
   save_fname <- str_c("./DATA/fts_flows_dataset","_",extract_datetime,".xlsx")
   save_fname_csv <- str_c("./DATA/fts_flows_dataset","_",extract_datetime,".csv")
@@ -217,7 +284,7 @@ for (i_country in 1:nrow(fts_countries)){
     #writeDataTable(wb,sheet="funding_flows",x=fts_flows_dataset,tableName = "funding_flows")
     #
     #saveWorkbook(wb,save_fname,overwrite = TRUE)
-    write.csv(x=fts_flows_dataset,file=save_fname_csv)
+    write.csv(x=fts_flows_dataset_processed,file=save_fname_csv)
 ```
 
 
